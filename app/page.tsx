@@ -14,6 +14,13 @@ const demoDocs = [
 
 const units = ["Gabinete da Ministra", "Direcção Nacional do Trabalho", "Direcção Nacional do Género", "Direcção Nacional de Acção Social", "Direcção Nacional do Trabalho Migratório", "Direcção Nacional da Criança", "Direcção Nacional de Observação do Mercado do Trabalho", "Direcção de Planificação e Cooperação", "Direcção de Administração e Recursos Humanos", "Gabinete Jurídico", "Departamento de Tecnologias de Informação e Comunicação"];
 const supervised = ["Instituto Nacional de Segurança Social", "Inspecção-Geral do Trabalho", "Comissão de Mediação e Arbitragem Laboral", "Instituto Nacional de Acção Social, IP"];
+type DemoUser = { id:string; name:string; email:string; password:string; unit:string; role:string; initials:string };
+const demoUsers: DemoUser[] = [
+  { id:"dpc", name:"Sérgio Ndimande", email:"sergio.demo", password:"SIGED2026", unit:"Direcção de Planificação e Cooperação", role:"Administrador", initials:"SN" },
+  { id:"secretaria", name:"Maria Cossa", email:"secretaria.demo", password:"SEC2026", unit:"Secretaria Central", role:"Gestora de Expediente", initials:"MC" },
+  { id:"gabinete", name:"Ana Mucavele", email:"gabinete.demo", password:"GAB2026", unit:"Gabinete da Ministra", role:"Despacho", initials:"AM" },
+  { id:"inas", name:"João Nhantumbo", email:"inas.demo", password:"INAS2026", unit:"Instituto Nacional de Acção Social, IP", role:"Utilizador Institucional", initials:"JN" },
+];
 
 const Icon = ({ name }: { name: string }) => {
   const map: Record<string, string> = { home:"⌂", inbox:"↓", send:"↗", flow:"⇄", archive:"▣", chart:"▥", unit:"◇", bell:"●", search:"⌕", file:"▤", clock:"◷", check:"✓", plus:"＋", arrow:"→", shield:"◆", menu:"☰", back:"←" };
@@ -28,6 +35,7 @@ export default function Home() {
   const [selected, setSelected] = useState<any>(demoDocs[0]);
   const [newOpen, setNewOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [user, setUser] = useState<DemoUser | null>(null);
   const filtered = useMemo(() => documents.filter(d => (d.assunto + d.id + d.origem).toLowerCase().includes(query.toLowerCase())), [documents, query]);
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
   const mapDocument = (d:any) => ({ dbId:d.id, id:d.reference, assunto:d.subject, origem:d.origin, destino:d.destination, tipo:d.documentType, entrada:new Date(d.createdAt).toLocaleDateString("pt-MZ"), prazo:d.deadline ? new Date(d.deadline).toLocaleDateString("pt-MZ") : "Sem prazo", estado:d.status, prioridade:d.priority, progress:d.progress });
@@ -45,7 +53,9 @@ export default function Home() {
   };
 
   if (view === "portal") return <Portal onEnter={() => setView("login")} />;
-  if (view === "login") return <Login onBack={() => setView("portal")} onLogin={() => setView("dashboard")} />;
+  if (view === "login") return <Login onBack={() => setView("portal")} onLogin={(account) => { setUser(account); setView("dashboard"); }} />;
+  const logout = () => { setUser(null); setView("login"); setQuery(""); setNewOpen(false); };
+  const activeUser = user ?? demoUsers[0];
 
   return (
     <div className="app-shell">
@@ -68,16 +78,16 @@ export default function Home() {
           <Nav icon="unit" label="Unidades e tuteladas" active={view === "unidades"} onClick={() => setView("unidades")} />
         </nav>
         <div className="help-card"><b>Precisa de ajuda?</b><span>Consulte o manual do utilizador ou contacte o suporte.</span><button onClick={() => notify("Centro de ajuda aberto")}>Centro de ajuda <Icon name="arrow" /></button></div>
-        <div className="side-user"><span className="avatar">SN</span><span><b>Sérgio Ndimande</b><small>DPC • Administrador</small></span><button>⋮</button></div>
+        <div className="side-user"><span className="avatar">{activeUser.initials}</span><span><b>{activeUser.name}</b><small>{activeUser.role}</small></span><button onClick={logout} title="Terminar sessão">↪</button></div>
       </aside>
       <main className="workspace">
         <header className="topbar">
           <div className="mobile-brand">SIGED</div>
           <label className="global-search"><Icon name="search" /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Pesquisar por assunto, número ou remetente..." /><kbd>⌘ K</kbd></label>
-          <div className="top-actions"><button className="round" aria-label="Notificações"><Icon name="bell" /><i /></button><span className="divider"/><button className="user-chip"><span className="avatar">SN</span><span><b>Sérgio Ndimande</b><small>Direcção de Planificação</small></span><span>⌄</span></button></div>
+          <div className="top-actions"><button className="round" aria-label="Notificações"><Icon name="bell" /><i /></button><span className="divider"/><div className="user-chip"><span className="avatar">{activeUser.initials}</span><span><b>{activeUser.name}</b><small>{activeUser.unit}</small></span><button className="logout-button" onClick={logout}>Sair ↪</button></div></div>
         </header>
         <section className="content">
-          {view === "dashboard" && <Dashboard setView={setView} select={(d) => { setSelected(d); setView("detalhe"); }} notify={notify} filtered={filtered} openNew={() => setNewOpen(true)} />}
+          {view === "dashboard" && <Dashboard user={activeUser} setView={setView} select={(d) => { setSelected(d); setView("detalhe"); }} notify={notify} filtered={filtered} openNew={() => setNewOpen(true)} />}
           {view === "expediente" && <Expediente docs={filtered} select={(d) => { setSelected(d); setView("detalhe"); }} notify={notify} openNew={() => setNewOpen(true)} />}
           {view === "detalhe" && <DocumentDetail doc={selected} back={() => setView("dashboard")} notify={notify} />}
           {view === "repositorio" && <Repository query={query} notify={notify} />}
@@ -122,10 +132,15 @@ function Portal({ onEnter }: { onEnter: () => void }) {
   </main>
 }
 
-function Login({ onBack, onLogin }: { onBack:()=>void; onLogin:()=>void }) { const [profile,setProfile]=useState("DPC"); return <main className="login-page"><button className="login-back" onClick={onBack}><Icon name="back"/> Portal institucional</button><section className="login-panel"><div className="login-brand"><span className="crest">MZ</span><b>REPÚBLICA DE MOÇAMBIQUE</b><strong>MINISTÉRIO DO TRABALHO, GÉNERO E ACÇÃO SOCIAL</strong><i/><h1>Bem-vindo ao SIGED</h1><p><b>Sistema Integrado de Gestão de Expediente.</b><br/>Acesso reservado aos funcionários e agentes autorizados do MTGAS.</p></div><form onSubmit={e=>{e.preventDefault();onLogin()}}><label>Unidade / perfil<select value={profile} onChange={e=>setProfile(e.target.value)}><option value="DPC">DPC — Técnico / Administrador</option><option value="SEC">Secretaria Central — Expediente</option><option value="GM">Gabinete da Ministra — Despacho</option><option value="INAS">INAS, IP — Instituição tutelada</option></select></label><label>Correio institucional<input type="email" defaultValue="sergio.ndimande@mtgas.gov.mz" required/></label><label>Palavra-passe<input type="password" defaultValue="SIGED2026" required/></label><div className="login-options"><label><input type="checkbox" defaultChecked/> Manter sessão</label><a>Recuperar acesso</a></div><button className="primary" type="submit"><Icon name="shield"/> Entrar no sistema</button><small>Ambiente demonstrativo — seleccione qualquer perfil para simular o acesso.</small></form></section></main> }
+function Login({ onBack, onLogin }: { onBack:()=>void; onLogin:(user:DemoUser)=>void }) {
+  const [accountId,setAccountId]=useState(demoUsers[0].id); const [email,setEmail]=useState(demoUsers[0].email); const [password,setPassword]=useState(""); const [error,setError]=useState("");
+  const selectAccount=(id:string)=>{const account=demoUsers.find(u=>u.id===id)!;setAccountId(id);setEmail(account.email);setPassword("");setError("")};
+  const submit=(e:React.FormEvent)=>{e.preventDefault();const account=demoUsers.find(u=>u.id===accountId);if(!account||account.email!==email.trim().toLowerCase()||account.password!==password){setError("Correio institucional ou palavra-passe incorrectos.");return}onLogin(account)};
+  return <main className="login-page"><button className="login-back" onClick={onBack}><Icon name="back"/> Portal institucional</button><section className="login-panel"><div className="login-brand"><span className="crest">MZ</span><b>REPÚBLICA DE MOÇAMBIQUE</b><strong>MINISTÉRIO DO TRABALHO, GÉNERO E ACÇÃO SOCIAL</strong><i/><h1>Bem-vindo ao SIGED</h1><p><b>Sistema Integrado de Gestão de Expediente.</b><br/>Acesso reservado aos funcionários e agentes autorizados do MTGAS.</p><div className="demo-accounts"><b>CONTAS FICTÍCIAS DE DEMONSTRAÇÃO</b>{demoUsers.map(u=><span key={u.id}><strong>{u.name}</strong><small>{u.email} • código: {u.password}</small></span>)}</div></div><form onSubmit={submit}><label>Utilizador / perfil<select value={accountId} onChange={e=>selectAccount(e.target.value)}>{demoUsers.map(u=><option value={u.id} key={u.id}>{u.name} — {u.role}</option>)}</select></label><label>Identificador de teste<input type="text" value={email} onChange={e=>setEmail(e.target.value)} required/></label><label>Código de acesso demonstrativo<input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Introduza o código de teste" required/></label>{error&&<p className="login-error">Identificador ou código incorrecto.</p>}<div className="login-options"><label><input type="checkbox" defaultChecked/> Manter sessão</label><a>Recuperar acesso</a></div><button className="primary" type="submit"><Icon name="shield"/> Entrar no sistema</button><small>Estas contas são fictícias e destinam-se exclusivamente à demonstração do protótipo.</small></form></section></main>
+}
 
-function Dashboard({ setView, select, notify, filtered, openNew }: any) {
-  return <><div className="page-title"><div><span className="breadcrumb">SIGED / Painel principal</span><h1>Bom dia, Sérgio <span>👋</span></h1><p>Acompanhe o movimento do expediente e as prioridades de hoje.</p></div><button className="primary compact" onClick={openNew}><Icon name="plus" /> Registar expediente</button></div>
+function Dashboard({ user, setView, select, notify, filtered, openNew }: any) {
+  return <><div className="page-title"><div><span className="breadcrumb">SIGED / Painel principal</span><h1>Bom dia, {user.name.split(" ")[0]} <span>👋</span></h1><p>Acompanhe o movimento do expediente e as prioridades de hoje.</p></div><button className="primary compact" onClick={openNew}><Icon name="plus" /> Registar expediente</button></div>
     <div className="alert"><span className="alert-icon">!</span><div><b>3 documentos aproximam-se do prazo</b><p>Existem expedientes que exigem a sua atenção nas próximas 48 horas.</p></div><button onClick={() => setView("expediente")}>Ver pendências <Icon name="arrow" /></button></div>
     <div className="metric-grid"><Metric icon="inbox" value="128" label="Recebidos este mês" trend="+12,4%" color="green"/><Metric icon="send" value="94" label="Enviados este mês" trend="+8,7%" color="blue"/><Metric icon="flow" value="37" label="Em tramitação" sub="7 sob sua responsabilidade" color="orange"/><Metric icon="check" value="86%" label="Dentro do prazo" trend="+4,2%" color="purple"/></div>
     <div className="dashboard-grid"><section className="panel recent"><div className="panel-head"><div><h2>Expediente recente</h2><p>Últimos documentos movimentados na sua unidade</p></div><button onClick={() => setView("expediente")}>Ver todos <Icon name="arrow" /></button></div><div className="doc-table"><div className="tr th"><span>DOCUMENTO / ASSUNTO</span><span>ORIGEM</span><span>ENTRADA</span><span>ESTADO</span><span /></div>{filtered.slice(0,5).map((d:any) => <DocRow key={d.id} d={d} select={select}/>)}</div></section>

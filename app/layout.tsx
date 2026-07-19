@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Starter Project",
-  description: "A clean starting point for building your site.",
+  title: "SIGED MTGAS — Gestão de Expediente",
+  description: "Sistema Integrado de Gestão de Expediente do MTGAS.",
   other: {
     "codex-preview": "development",
   },
@@ -30,7 +30,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="pt-MZ">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

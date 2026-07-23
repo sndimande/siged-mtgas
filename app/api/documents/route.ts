@@ -1,25 +1,69 @@
 import { desc, eq } from "drizzle-orm";
-import { getDb } from "../../../db";
-import { documents, movements } from "../../../db/schema";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { ensureDatabaseSchema, getDb } from "../../../db";
+import { attachments, documents, movements } from "../../../db/schema";
+import { getSessionUser, recordAudit } from "../../../lib/auth";
 
 const seed = [
-  { reference:"MTGAS/ENT/2026/0842", subject:"Proposta de Plano de Formação do SIMA", origin:"Direcção de Planificação e Cooperação", destination:"Gabinete da Ministra", documentType:"Nota", flowType:"Documento interno", priority:"Alta", status:"Em despacho", deadline:"2026-07-22", progress:72 },
-  { reference:"MTGAS/ENT/2026/0839", subject:"Balanço do PESOE — I Semestre 2026", origin:"Direcção Nacional de Acção Social", destination:"Direcção de Planificação e Cooperação", documentType:"Relatório", flowType:"Documento recebido", priority:"Normal", status:"Em análise", deadline:"2026-07-24", progress:55 },
-  { reference:"MTGAS/SAI/2026/0617", subject:"Pedido de actualização dos indicadores provinciais", origin:"Direcção de Planificação e Cooperação", destination:"Delegações Provinciais", documentType:"Ofício", flowType:"Documento de saída", priority:"Alta", status:"Enviado", deadline:"2026-07-19", progress:100 },
+  { reference:"DEMO/ENT/2026/0001", subject:"Documento demonstrativo para validação do fluxo", origin:"Unidade de Demonstração A", destination:"Unidade de Demonstração B", documentType:"Nota", flowType:"Documento interno", priority:"Alta", status:"Em despacho", deadline:"2026-12-15", progress:72, confidentiality:"Interno" },
+  { reference:"DEMO/ENT/2026/0002", subject:"Relatório fictício para teste do sistema", origin:"Unidade de Demonstração C", destination:"Unidade de Demonstração A", documentType:"Relatório", flowType:"Documento recebido", priority:"Normal", status:"Em análise", deadline:"2026-12-18", progress:55, confidentiality:"Interno" },
+  { reference:"DEMO/SAI/2026/0003", subject:"Pedido demonstrativo de actualização de dados", origin:"Unidade de Demonstração A", destination:"Unidade de Demonstração Provincial", documentType:"Ofício", flowType:"Documento de saída", priority:"Alta", status:"Enviado", deadline:"2026-12-20", progress:100, confidentiality:"Público" },
+  { reference:"DEMO/INT/2026/0004", subject:"Requisição fictícia para ensaio do encaminhamento", origin:"Unidade de Demonstração B", destination:"Unidade de Demonstração C", documentType:"Informação", flowType:"Documento interno", priority:"Normal", status:"Em tramitação", deadline:"2026-12-22", progress:40, confidentiality:"Interno" },
+  { reference:"DEMO/ENT/2026/0005", subject:"Relatório demonstrativo concluído", origin:"Instituição Tutelada de Demonstração", destination:"Unidade de Demonstração A", documentType:"Relatório", flowType:"Documento recebido", priority:"Normal", status:"Concluído", deadline:"2026-12-10", progress:100, confidentiality:"Interno", archived:true },
 ];
+
+const progressByStatus: Record<string, number> = {
+  "Registado": 10,
+  "Distribuído": 25,
+  "Em tramitação": 40,
+  "Em análise": 55,
+  "Em despacho": 75,
+  "Devolvido": 45,
+  "Enviado": 100,
+  "Concluído": 100,
+  "Arquivado": 100,
+};
+
+async function documentDetail(id: number) {
+  const db = getDb();
+  const [document] = await db.select().from(documents).where(eq(documents.id, id)).limit(1);
+  if (!document) return null;
+  const [history, files] = await Promise.all([
+    db.select().from(movements).where(eq(movements.documentId, id)).orderBy(desc(movements.createdAt)),
+    db.select().from(attachments).where(eq(attachments.documentId, id)).orderBy(desc(attachments.createdAt)),
+  ]);
+  return { ...document, movements: history, attachments: files };
+}
 
 export async function GET(request: Request) {
   try {
+    await ensureDatabaseSchema();
+    const user = await getSessionUser(request);
+    if (!user) return Response.json({ error: "Sessão necessária" }, { status: 401 });
+    const url = new URL(request.url);
+    const id = Number(url.searchParams.get("id"));
+    if (id) {
+      const document = await documentDetail(id);
+      return document ? Response.json({ document }) : Response.json({ error: "Expediente não encontrado" }, { status: 404 });
+    }
+
     const db = getDb();
-    let rows = await db.select().from(documents).orderBy(desc(documents.createdAt)).limit(200);
+    let rows = await db.select().from(documents).orderBy(desc(documents.createdAt)).limit(500);
     if (!rows.length) {
       await db.insert(documents).values(seed);
-      rows = await db.select().from(documents).orderBy(desc(documents.createdAt)).limit(200);
+      rows = await db.select().from(documents).orderBy(desc(documents.createdAt)).limit(500);
     }
-    const q = new URL(request.url).searchParams.get("q")?.toLowerCase().trim();
-    const filtered = q ? rows.filter(r => `${r.reference} ${r.subject} ${r.origin} ${r.destination}`.toLowerCase().includes(q)) : rows;
-    return Response.json({ documents: filtered });
+    const q = url.searchParams.get("q")?.toLowerCase().trim();
+    const status = url.searchParams.get("status");
+    const flowType = url.searchParams.get("flowType");
+    const destination = url.searchParams.get("destination");
+    const filtered = rows.filter((row) => {
+      const matchesQuery = !q || `${row.reference} ${row.subject} ${row.origin} ${row.destination} ${row.documentType}`.toLowerCase().includes(q);
+      return matchesQuery
+        && (!status || row.status === status)
+        && (!flowType || row.flowType === flowType)
+        && (!destination || row.destination === destination);
+    });
+    return Response.json({ documents: filtered, total: filtered.length });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Erro ao consultar expedientes" }, { status: 500 });
   }
@@ -27,41 +71,90 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    await ensureDatabaseSchema();
+    const user = await getSessionUser(request);
+    if (!user) return Response.json({ error: "Sessão necessária" }, { status: 401 });
     const payload = await request.json() as Record<string, string>;
-    const required = ["subject","origin","destination","documentType","flowType"];
-    if (required.some(k => !payload[k]?.trim())) return Response.json({ error:"Preencha todos os campos obrigatórios" }, { status:400 });
+    const required = ["subject", "origin", "destination", "documentType", "flowType"];
+    if (required.some((key) => !payload[key]?.trim())) return Response.json({ error: "Preencha todos os campos obrigatórios" }, { status: 400 });
+
     const db = getDb();
     const year = new Date().getFullYear();
     const prefix = payload.flowType === "Documento de saída" ? "SAI" : payload.flowType === "Documento interno" ? "INT" : "ENT";
-    const reference = `MTGAS/${prefix}/${year}/${String(Date.now()).slice(-6)}`;
-    const user = await getChatGPTUser();
+    const suffix = `${Date.now().toString().slice(-5)}${Math.floor(Math.random() * 10)}`;
+    const reference = `MTGAS/${prefix}/${year}/${suffix}`;
     const [created] = await db.insert(documents).values({
-      reference, subject:payload.subject.trim(), origin:payload.origin.trim(), destination:payload.destination.trim(),
-      documentType:payload.documentType, flowType:payload.flowType, priority:payload.priority || "Normal",
-      deadline:payload.deadline || null, notes:payload.notes || "", status:"Registado", progress:10,
-      createdBy:user?.email || "utilizador-demo",
+      reference,
+      subject: payload.subject.trim(),
+      origin: payload.origin.trim(),
+      destination: payload.destination.trim(),
+      documentType: payload.documentType,
+      flowType: payload.flowType,
+      priority: payload.priority || "Normal",
+      deadline: payload.deadline || null,
+      notes: payload.notes?.trim() || "",
+      senderReference: payload.senderReference?.trim() || "",
+      confidentiality: payload.confidentiality || "Interno",
+      status: "Registado",
+      progress: 10,
+      createdBy: user.username,
     }).returning();
-    await db.insert(movements).values({ documentId:created.id, action:"Expediente registado", fromUnit:created.origin, toUnit:created.destination, actor:user?.displayName || "Utilizador demonstrativo" });
-    return Response.json({ document:created }, { status:201 });
+    await db.insert(movements).values({
+      documentId: created.id,
+      action: "Expediente registado",
+      fromUnit: created.origin,
+      toUnit: created.destination,
+      actor: user.name,
+      comment: created.notes,
+    });
+    await recordAudit(user, "CREATE", "document", String(created.id), reference);
+    return Response.json({ document: await documentDetail(created.id) }, { status: 201 });
   } catch (error) {
-    return Response.json({ error:error instanceof Error ? error.message : "Erro ao registar expediente" }, { status:500 });
+    return Response.json({ error: error instanceof Error ? error.message : "Erro ao registar expediente" }, { status: 500 });
   }
 }
 
 export async function PATCH(request: Request) {
   try {
-    const payload = await request.json() as { id?:number; status?:string; destination?:string; comment?:string };
-    if (!payload.id) return Response.json({ error:"Identificador obrigatório" }, { status:400 });
+    await ensureDatabaseSchema();
+    const user = await getSessionUser(request);
+    if (!user) return Response.json({ error: "Sessão necessária" }, { status: 401 });
+    const payload = await request.json() as {
+      id?: number;
+      status?: string;
+      destination?: string;
+      comment?: string;
+      priority?: string;
+      deadline?: string;
+      archived?: boolean;
+    };
+    if (!payload.id) return Response.json({ error: "Identificador obrigatório" }, { status: 400 });
     const db = getDb();
-    const [current] = await db.select().from(documents).where(eq(documents.id,payload.id)).limit(1);
-    if (!current) return Response.json({ error:"Expediente não encontrado" }, { status:404 });
-    const status = payload.status || "Em tramitação";
-    const progress = status === "Concluído" ? 100 : status === "Em despacho" ? 72 : 40;
-    const [updated] = await db.update(documents).set({ status, destination:payload.destination || current.destination, progress, updatedAt:new Date().toISOString() }).where(eq(documents.id,payload.id)).returning();
-    const user = await getChatGPTUser();
-    await db.insert(movements).values({ documentId:current.id, action:status, fromUnit:current.destination, toUnit:updated.destination, actor:user?.displayName || "Utilizador demonstrativo", comment:payload.comment || "" });
-    return Response.json({ document:updated });
+    const [current] = await db.select().from(documents).where(eq(documents.id, payload.id)).limit(1);
+    if (!current) return Response.json({ error: "Expediente não encontrado" }, { status: 404 });
+
+    const status = payload.archived ? "Arquivado" : payload.status || current.status;
+    const destination = payload.destination?.trim() || current.destination;
+    const [updated] = await db.update(documents).set({
+      status,
+      destination,
+      priority: payload.priority || current.priority,
+      deadline: payload.deadline || current.deadline,
+      archived: payload.archived ?? current.archived,
+      progress: progressByStatus[status] ?? current.progress,
+      updatedAt: new Date().toISOString(),
+    }).where(eq(documents.id, payload.id)).returning();
+    await db.insert(movements).values({
+      documentId: current.id,
+      action: status === current.status && destination !== current.destination ? "Encaminhado" : status,
+      fromUnit: current.destination,
+      toUnit: destination,
+      actor: user.name,
+      comment: payload.comment?.trim() || "",
+    });
+    await recordAudit(user, "UPDATE", "document", String(current.id), `${current.status} → ${status}; ${current.destination} → ${destination}`);
+    return Response.json({ document: await documentDetail(updated.id) });
   } catch (error) {
-    return Response.json({ error:error instanceof Error ? error.message : "Erro ao actualizar expediente" }, { status:500 });
+    return Response.json({ error: error instanceof Error ? error.message : "Erro ao actualizar expediente" }, { status: 500 });
   }
 }
